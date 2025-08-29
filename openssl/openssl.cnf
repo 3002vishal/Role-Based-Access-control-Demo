@@ -1,0 +1,43 @@
+[ ca ]
+default_ca = CA_default
+
+
+[ CA_default ]
+dir = ./demoCA
+certs = $dir/certs
+private_key = $dir/private/ca.key.pem
+new_certs_dir = $dir/newcerts
+database = $dir/index.txt
+serial = $dir/serial
+default_md = sha256
+policy = policy_any
+
+
+[ policy_any ]
+countryName = optional
+stateOrProvinceName = optional
+organizationName = optional
+organizationalUnitName = optional
+commonName = supplied
+emailAddress = optional
+
+
+[ usr_cert ]
+basicConstraints=CA:FALSE
+nsCertType = client, email
+nsComment = "Client Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+# custom extension for roles
+1.2.3.4.5.6.7.8.1 = ASN1:UTF8String:role=viewer
+
+
+[ server_cert ]
+basicConstraints=CA:FALSE
+nsCertType = server
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
