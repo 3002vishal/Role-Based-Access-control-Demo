@@ -11,7 +11,6 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from flask_cors import CORS
 
-
 app = Flask(__name__)
 CORS(app)
 
@@ -22,11 +21,13 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///certs.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
+
 class UserCert(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     role = db.Column(db.String(50), nullable=False)
     cert_path = db.Column(db.String(200), nullable=False)
+
 
 with app.app_context():
     db.create_all()
@@ -35,7 +36,11 @@ with app.app_context():
 # Config
 # -------------------------
 PS_SCRIPT_PATH = r"..\openssl\issue_cert.ps1"
-CERT_DIR = os.getcwd()
+
+# Create cert directory inside current working directory
+CERT_DIR = os.path.join(os.getcwd(), "cert")
+os.makedirs(CERT_DIR, exist_ok=True)
+
 ALLOWED_ROLES = ["admin", "viewer", "editor"]
 
 # In-memory stores
@@ -79,6 +84,7 @@ def enroll():
     if role not in ALLOWED_ROLES:
         return jsonify({"error": "role not allowed"}), 403
 
+    # Run PowerShell script to issue cert
     cmd = [
         "powershell.exe",
         "-ExecutionPolicy", "Bypass",
@@ -93,6 +99,7 @@ def enroll():
     except subprocess.CalledProcessError as e:
         return jsonify({"error": "Failed to issue certificate", "details": str(e)}), 500
 
+    # Store cert in ./cert/username.cert.pem
     cert_file = os.path.join(CERT_DIR, f"{username}.cert.pem")
 
     # Save in DB (no private key storage)
@@ -132,16 +139,12 @@ def login_challenge():
 
     CHALLENGES[username] = challenge
 
-    return jsonify({
-        "challenge": challenge_b64
-    })
+    return jsonify({"challenge": challenge_b64})
 
 
 # -------------------------
 # Login Step 2: Verify signature
 # -------------------------
-
-
 @app.route("/login-verify", methods=["POST"])
 def login_verify():
     data = request.json
@@ -161,7 +164,9 @@ def login_verify():
         user_cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_data)
 
     # Extract public key as cryptography object
-    pub_key = load_pem_public_key(crypto.dump_publickey(crypto.FILETYPE_PEM, user_cert.get_pubkey()))
+    pub_key = load_pem_public_key(
+        crypto.dump_publickey(crypto.FILETYPE_PEM, user_cert.get_pubkey())
+    )
 
     # Get challenge
     challenge = CHALLENGES.get(username)
@@ -201,10 +206,12 @@ def login_verify():
 def admin_data():
     return jsonify({"message": f"Welcome Admin {g.user['username']}!"})
 
+
 @app.route("/viewer-data")
 @role_required(["viewer", "admin"])
 def viewer_data():
     return jsonify({"message": f"Hello {g.user['username']}, you can view data."})
+
 
 @app.route("/editor-data")
 @role_required(["editor", "admin"])
@@ -212,5 +219,8 @@ def editor_data():
     return jsonify({"message": f"Hello {g.user['username']}, you can edit data."})
 
 
+# -------------------------
+# Main entry
+# -------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
