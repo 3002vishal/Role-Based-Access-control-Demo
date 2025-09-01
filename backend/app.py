@@ -72,6 +72,7 @@ def role_required(allowed_roles):
 # -------------------------
 # Enroll route
 # -------------------------
+
 @app.route("/enroll", methods=["POST"])
 def enroll():
     data = request.json
@@ -91,7 +92,7 @@ def enroll():
         "-CN", username,
         "-ROLE", role,
         "-TYPE", type_,
-        "-OUTDIR", CERT_DIR   # 👈 new argument
+        "-OUTDIR", CERT_DIR
     ]
 
     try:
@@ -100,8 +101,9 @@ def enroll():
         return jsonify({"error": "Failed to issue certificate", "details": str(e)}), 500
 
     cert_file = os.path.join(CERT_DIR, f"{username}.cert.pem")
+    key_file  = os.path.join(CERT_DIR, f"{username}.key.pem")
 
-    # Save in DB (no private key storage)
+    # Save cert info in DB (no private key!)
     user_cert = UserCert.query.filter_by(username=username).first()
     if user_cert:
         user_cert.cert_path = cert_file
@@ -111,11 +113,24 @@ def enroll():
         db.session.add(user_cert)
     db.session.commit()
 
+    # Read private key (only once)
+    with open(key_file, "rb") as f:
+        key_content = f.read()
+
+    # Delete private key file from server (so it’s never stored)
+    try:
+        os.remove(key_file)
+    except Exception:
+        pass
+
+    # Return private key as base64 string
     return jsonify({
-        "cert_file": cert_file,
+        "username": username,
         "role": role,
-        "type": type_
+        "type": type_,
+        "private_key_b64": base64.b64encode(key_content).decode("utf-8")
     })
+
 
 
 # -------------------------
