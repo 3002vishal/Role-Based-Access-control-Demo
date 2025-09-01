@@ -35,7 +35,12 @@ with app.app_context():
 # Config
 # -------------------------
 PS_SCRIPT_PATH = r"..\openssl\issue_cert.ps1"
-CERT_DIR = os.getcwd()
+
+# Always store certs inside "cert" folder relative to app.py
+BASE_DIR = os.getcwd()
+CERT_DIR = os.path.join(BASE_DIR, "cert")
+os.makedirs(CERT_DIR, exist_ok=True)
+
 ALLOWED_ROLES = ["admin", "viewer", "editor"]
 
 # In-memory stores
@@ -85,7 +90,8 @@ def enroll():
         "-File", PS_SCRIPT_PATH,
         "-CN", username,
         "-ROLE", role,
-        "-TYPE", type_
+        "-TYPE", type_,
+        "-OUTDIR", CERT_DIR   # 👈 new argument
     ]
 
     try:
@@ -140,8 +146,6 @@ def login_challenge():
 # -------------------------
 # Login Step 2: Verify signature
 # -------------------------
-
-
 @app.route("/login-verify", methods=["POST"])
 def login_verify():
     data = request.json
