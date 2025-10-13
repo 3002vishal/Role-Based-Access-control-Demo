@@ -10,7 +10,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from flask_cors import CORS
-
+import jwt
+import datetime
 
 app = Flask(__name__)
 CORS(app)
@@ -36,17 +37,19 @@ with app.app_context():
 # -------------------------
 PS_SCRIPT_PATH = r"..\openssl\issue_cert.ps1"
 
-# Always store certs inside "cert" folder relative to app.py
 BASE_DIR = os.getcwd()
 CERT_DIR = os.path.join(BASE_DIR, "cert")
 os.makedirs(CERT_DIR, exist_ok=True)
 
 ALLOWED_ROLES = ["admin", "viewer", "editor"]
 
-# In-memory stores
-SESSIONS = {}       # token → {username, role}
-CHALLENGES = {}     # username → challenge
+# JWT config
+app.config["JWT_SECRET"] = secrets.token_hex(32)
+app.config["JWT_ALGORITHM"] = "HS256"
+app.config["JWT_EXP_DELTA_SECONDS"] = 3600  # 1 hour expiry
 
+# In-memory store for challenges
+CHALLENGES = {}  # username → challenge
 
 # -------------------------
 # Helper: role-based access
@@ -55,24 +58,29 @@ def role_required(allowed_roles):
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
-            token = request.headers.get("Authorization")
-            if not token or token not in SESSIONS:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header or not auth_header.startswith("Bearer "):
                 return jsonify({"error": "Unauthorized"}), 401
 
-            user = SESSIONS[token]
-            if user["role"] not in allowed_roles:
+            token = auth_header.split(" ")[1]
+            try:
+                payload = jwt.decode(token, app.config["JWT_SECRET"], algorithms=[app.config["JWT_ALGORITHM"]])
+            except jwt.ExpiredSignatureError:
+                return jsonify({"error": "Token expired"}), 401
+            except jwt.InvalidTokenError:
+                return jsonify({"error": "Invalid token"}), 401
+
+            if payload["role"] not in allowed_roles:
                 return jsonify({"error": "Forbidden: insufficient role"}), 403
 
-            g.user = user
+            g.user = {"username": payload["username"], "role": payload["role"]}
             return f(*args, **kwargs)
         return wrapper
     return decorator
 
-
 # -------------------------
 # Enroll route
 # -------------------------
-
 @app.route("/enroll", methods=["POST"])
 def enroll():
     data = request.json
@@ -117,7 +125,7 @@ def enroll():
     with open(key_file, "rb") as f:
         key_content = f.read()
 
-    # Delete private key file from server (so it’s never stored)
+    # Delete private key file from server
     try:
         os.remove(key_file)
     except Exception:
@@ -130,8 +138,6 @@ def enroll():
         "type": type_,
         "private_key_b64": base64.b64encode(key_content).decode("utf-8")
     })
-
-
 
 # -------------------------
 # Login Step 1: Issue challenge
@@ -150,16 +156,12 @@ def login_challenge():
     # Generate random challenge
     challenge = secrets.token_bytes(32)
     challenge_b64 = base64.b64encode(challenge).decode()
-
     CHALLENGES[username] = challenge
 
-    return jsonify({
-        "challenge": challenge_b64
-    })
-
+    return jsonify({"challenge": challenge_b64})
 
 # -------------------------
-# Login Step 2: Verify signature
+# Login Step 2: Verify signature and issue JWT4
 # -------------------------
 @app.route("/login-verify", methods=["POST"])
 def login_verify():
@@ -179,10 +181,8 @@ def login_verify():
         cert_data = f.read()
         user_cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_data)
 
-    # Extract public key as cryptography object
     pub_key = load_pem_public_key(crypto.dump_publickey(crypto.FILETYPE_PEM, user_cert.get_pubkey()))
 
-    # Get challenge
     challenge = CHALLENGES.get(username)
     if not challenge:
         return jsonify({"error": "No challenge found for user"}), 400
@@ -197,9 +197,14 @@ def login_verify():
             hashes.SHA256()
         )
 
-        # If successful, issue session token
-        token = f"{username}-{secrets.token_hex(16)}"
-        SESSIONS[token] = {"username": username, "role": db_user.role}
+        # JWT payload
+        payload = {
+            "username": username,
+            "role": db_user.role,
+            "exp": datetime.datetime.utcnow() + datetime.timedelta(seconds=app.config["JWT_EXP_DELTA_SECONDS"])
+        }
+
+        token = jwt.encode(payload, app.config["JWT_SECRET"], algorithm=app.config["JWT_ALGORITHM"])
         del CHALLENGES[username]
 
         return jsonify({
@@ -208,9 +213,9 @@ def login_verify():
             "role": db_user.role,
             "token": token
         })
+
     except Exception as e:
         return jsonify({"error": "Signature verification failed", "details": str(e)}), 401
-
 
 # -------------------------
 # Role-based routes
@@ -229,7 +234,6 @@ def viewer_data():
 @role_required(["editor", "admin"])
 def editor_data():
     return jsonify({"message": f"Hello {g.user['username']}, you can edit data."})
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
