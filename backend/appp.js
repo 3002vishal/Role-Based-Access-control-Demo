@@ -96,7 +96,7 @@ async function extractRoleFromCert(certPath) {
       return role;
     }
 
-    console.warn("⚠️ No role OID found in certificate.");
+    console.warn(" No role OID found in certificate.");
     return null;
   } catch (err) {
     console.error("Failed to extract role:", err.message);
@@ -270,11 +270,11 @@ app.post("/admin-data", roleRequiredCert(["admin"]), (req, res) => {
   res.json({ message: `Welcome Admin ${req.user.username}!` });
 });
 
-app.post("/viewer-data", roleRequiredCert(["viewer", "admin"]), (req, res) => {
+app.post("/viewer-data", roleRequiredCert(["viewer"]), (req, res) => {
   res.json({ message: `Hello ${req.user.username}, you can view data.` });
 });
 
-app.post("/editor-data", roleRequiredCert(["editor", "admin"]), (req, res) => {
+app.post("/editor-data", roleRequiredCert(["editor"]), (req, res) => {
   res.json({ message: `Hello ${req.user.username}, you can edit data.` });
 });
 

@@ -1,0 +1,19 @@
+[NewRequest]
+Subject = "CN=akshata genius, O=MyCompany, C=IN"
+KeyLength = 2048
+KeySpec = 2 ; Signature Only - CRITICAL for SafeSign/Moserbear
+KeyUsage = 0xA0 ; Digital Signature, Key Encipherment
+MachineKeySet = FALSE
+Exportable = FALSE ; Private Key stays on HSM
+RequestType = PKCS10
+SMIME = FALSE
+
+; Provider configured for SafeSign/Moserbear
+ProviderName = "SafeSign Standard Cryptographic Service Provider"
+ProviderType = 1
+
+; Force a specific container based on the username
+KeyContainer = "akshata genius"
+
+[EnhancedKeyUsageExtension]
+OID=1.3.6.1.5.5.7.3.2 ; Client Authentication
