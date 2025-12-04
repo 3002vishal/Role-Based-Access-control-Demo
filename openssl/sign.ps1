@@ -1,53 +1,62 @@
-# File: sign.ps1 (Legacy/Compatible Version)
+# File: sign.ps1 (Universal Version)
 param(
     [string]$ChallengeData
 )
 
-# 1. Load Security Assembly
 Add-Type -AssemblyName System.Security
 
-# 2. Open Store
+# 1. Select Certificate
 $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("My", "CurrentUser")
 $store.Open("ReadOnly")
-
-# 3. Select Certificate
 $certs = $store.Certificates.Find("FindByTimeValid", [DateTime]::Now, $false)
 $selection = [System.Security.Cryptography.X509Certificates.X509Certificate2UI]::SelectFromCollection(
     $certs, "Select Token", "Pick your hardware certificate", "SingleSelection"
 )
 
-if ($selection.Count -eq 0) {
-    Write-Output "ERROR:User_Cancelled"
-    exit
-}
+if ($selection.Count -eq 0) { Write-Output "ERROR:User_Cancelled"; exit }
 $cert = $selection[0]
 
-try {
-    # 4. Get Private Key (The "Old Reliable" Way)
-    # We cast it explicitly to RSACryptoServiceProvider
-    $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]$cert.PrivateKey
+# 2. Check if Private Key exists at all
+if ($cert.HasPrivateKey -eq $false) {
+    Write-Output "ERROR:No_Private_Key_Found (You picked a Public-Only certificate. Try the other one?)"
+    exit
+}
 
-    if ($null -eq $rsa) {
-        Write-Output "ERROR:No_Private_Key_Found"
+try {
+    # 3. Convert Input to Bytes
+    $dataBytes = [System.Text.Encoding]::UTF8.GetBytes($ChallengeData)
+    $signatureBytes = $null
+
+    # 4. Attempt Signing (Try Modern Method First, then Legacy)
+    try {
+        # Modern CNG Method (For newer tokens)
+        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+        if ($rsa) {
+            $signatureBytes = $rsa.SignData($dataBytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        }
+    } catch {
+        # Ignore error and fall through to legacy
+    }
+
+    # Fallback to Legacy Method (For older tokens/drivers)
+    if ($null -eq $signatureBytes) {
+        $rsaLegacy = $cert.PrivateKey
+        if ($rsaLegacy -is [System.Security.Cryptography.RSACryptoServiceProvider]) {
+            $signatureBytes = $rsaLegacy.SignData($dataBytes, "SHA256")
+        }
+    }
+
+    if ($null -eq $signatureBytes) {
+        Write-Output "ERROR:Could_Not_Sign_With_This_Token"
         exit
     }
 
-    # 5. Sign Data (Simpler Legacy Syntax)
-    # Convert string to bytes
-    $dataBytes = [System.Text.Encoding]::UTF8.GetBytes($ChallengeData)
-    
-    # Sign using SHA256. 
-    # Note: older providers use "SHA256" string, not the complex object.
-    $signatureBytes = $rsa.SignData($dataBytes, "SHA256")
-
-    # 6. Output
+    # 5. Success Output
     $signatureBase64 = [Convert]::ToBase64String($signatureBytes)
     Write-Output $signatureBase64
 
 } catch {
-    # Debug info if it still fails
-    Write-Host "--------------- ERROR DETAILS ---------------" -ForegroundColor Red
-    Write-Host $_.Exception.Message -ForegroundColor Yellow
-    Write-Host "---------------------------------------------" -ForegroundColor Red
+    Write-Host "ERROR:Critical_Failure"
+    Write-Host $_.Exception.Message
     exit
 }
