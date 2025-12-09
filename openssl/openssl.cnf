@@ -94,10 +94,10 @@ extendedKeyUsage = clientAuth
 # CLIENT CERT WITH ROLE = SUPERUSER  (EXAMPLE)
 # ===========================================================
 
-[ role_superuser ]
+[ role_editor ]
 basicConstraints = CA:FALSE
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 keyUsage = digitalSignature
 extendedKeyUsage = clientAuth
-1.2.3.4.5.6.7.8.1 = ASN1:UTF8String:Role=superuser
+1.2.3.4.5.6.7.8.1 = ASN1:UTF8String:Role=editor

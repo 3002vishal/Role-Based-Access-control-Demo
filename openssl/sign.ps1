@@ -1,4 +1,4 @@
-# File: sign.ps1 (Universal Version)
+# File: sign.ps1 (Fixed: Forced Provider Type 1)
 param(
     [string]$ChallengeData
 )
@@ -16,47 +16,84 @@ $selection = [System.Security.Cryptography.X509Certificates.X509Certificate2UI]:
 if ($selection.Count -eq 0) { Write-Output "ERROR:User_Cancelled"; exit }
 $cert = $selection[0]
 
-# 2. Check if Private Key exists at all
+# 2. Check Private Key existence
 if ($cert.HasPrivateKey -eq $false) {
-    Write-Output "ERROR:No_Private_Key_Found (You picked a Public-Only certificate. Try the other one?)"
+    Write-Output "ERROR:No_Private_Key_Found"
     exit
 }
 
 try {
-    # 3. Convert Input to Bytes
     $dataBytes = [System.Text.Encoding]::UTF8.GetBytes($ChallengeData)
     $signatureBytes = $null
 
-    # 4. Attempt Signing (Try Modern Method First, then Legacy)
+    # --- ATTEMPT 1: DIRECT CSP RECONSTRUCTION (The Fix) ---
     try {
-        # Modern CNG Method (For newer tokens)
-        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
-        if ($rsa) {
-            $signatureBytes = $rsa.SignData($dataBytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        # Get info from the certificate
+        $privKeyInfo = $cert.PrivateKey.CspKeyContainerInfo
+        
+        # Build connection parameters
+        $cspParams = New-Object System.Security.Cryptography.CspParameters
+        
+        # 1. Use the Provider Name from the cert (e.g. "SafeSign Standard...")
+        $cspParams.ProviderName = $privKeyInfo.ProviderName
+        
+        # 2. FORCE ProviderType TO 1 (PROV_RSA_FULL)
+        # This fixes the "Invalid provider type specified" error
+        $cspParams.ProviderType = 1 
+        
+        $cspParams.KeyContainerName = $privKeyInfo.KeyContainerName
+        $cspParams.KeyNumber = $privKeyInfo.KeyNumber
+        $cspParams.Flags = [System.Security.Cryptography.CspProviderFlags]::UseExistingKey
+
+        # Create the RSA signer
+        $rsaDirect = New-Object System.Security.Cryptography.RSACryptoServiceProvider($cspParams)
+
+        # Try SHA256 first
+        try {
+            $signatureBytes = $rsaDirect.SignData($dataBytes, "SHA256")
         }
-    } catch {
-        # Ignore error and fall through to legacy
+        catch {
+            # Fallback to SHA1 if token is old
+            $signatureBytes = $rsaDirect.SignData($dataBytes, "SHA1")
+        }
+    }
+    catch {
+        $err1 = $_.Exception.Message
     }
 
-    # Fallback to Legacy Method (For older tokens/drivers)
+    # --- ATTEMPT 2: STANDARD LEGACY (Backup) ---
     if ($null -eq $signatureBytes) {
-        $rsaLegacy = $cert.PrivateKey
-        if ($rsaLegacy -is [System.Security.Cryptography.RSACryptoServiceProvider]) {
-            $signatureBytes = $rsaLegacy.SignData($dataBytes, "SHA256")
-        }
+        try {
+            # Force cast to RSACryptoServiceProvider
+            $rsaLegacy = [System.Security.Cryptography.RSACryptoServiceProvider]$cert.PrivateKey
+            if ($rsaLegacy) {
+                 $signatureBytes = $rsaLegacy.SignData($dataBytes, "SHA256")
+            }
+        } catch { $err2 = $_.Exception.Message }
     }
 
+    # --- ATTEMPT 3: MODERN CNG (Last Resort) ---
+    if ($null -eq $signatureBytes) {
+        try {
+            $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+            if ($rsa) {
+                $signatureBytes = $rsa.SignData($dataBytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            }
+        } catch { $err3 = $_.Exception.Message }
+    }
+
+    # 5. Final Output
     if ($null -eq $signatureBytes) {
         Write-Output "ERROR:Could_Not_Sign_With_This_Token"
-        exit
+        Write-Output "Details: DirectCSP: $err1 | Legacy: $err2 | CNG: $err3"
+        exit 1
     }
 
-    # 5. Success Output
     $signatureBase64 = [Convert]::ToBase64String($signatureBytes)
     Write-Output $signatureBase64
 
 } catch {
     Write-Host "ERROR:Critical_Failure"
     Write-Host $_.Exception.Message
-    exit
+    exit 1
 }

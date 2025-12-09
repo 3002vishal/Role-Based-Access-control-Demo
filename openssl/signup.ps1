@@ -16,7 +16,7 @@ $csrFileName = "$username.req"
 $responseFileName = "$username.cer"
 
 # Helper to output JSON for the Node.js bridge
-function Output-Json ($status, $msg, $data = $null) {
+function Output-Json($status, $msg, $data = $null) {
     $obj = @{
         status = $status
         message = $msg
