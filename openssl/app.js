@@ -1,18 +1,16 @@
-import express from "express";
-import crypto from "crypto";
-import fs from "fs";
-import path from "path";
-import { exec } from "child_process";
-import cors from "cors";
-import { fileURLToPath } from "url";
-import { dirname } from "path";
-import forge from "node-forge";
+const express = require("express");
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const { exec } = require("child_process");
+const cors = require("cors");
+const forge = require("node-forge");
 
 const app = express();
 const PORT = 5000;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// NOTE: In CommonJS, __dirname is available automatically. 
+// We don't need fileURLToPath or import.meta.url.
 
 // ===================================================
 // Create certificates folder
@@ -48,13 +46,22 @@ function getRoleFromCert(username) {
       (ext) => ext.id === "1.2.3.4.5.6.7.8.1"
     );
 
-    //if (!roleExt || !roleExt.value) return "viewer";
+    if (!roleExt || !roleExt.value) {
+        // Fallback or just return null
+        return "viewer"; 
+    }
 
-    const raw = roleExt.value.toLowerCase();
-    console.log("role data ", raw );
+    // forge returns the raw bytes for the extension value sometimes, 
+    // so we ensure it's a string.
+    const raw = roleExt.value.toString().toLowerCase();
+    
+    console.log("role data:", raw);
+    
     if (raw.includes("admin")) return "admin";
     if (raw.includes("editor")) return "editor";
-    if(raw.includes("viewer")) return  "viewer";
+    if (raw.includes("viewer")) return "viewer";
+    
+    return "viewer"; // Default fallback
   } catch (err) {
     console.error("Error parsing certificate:", err);
     return null;
@@ -81,26 +88,29 @@ app.post("/api/enroll", (req, res) => {
     console.error("Failed to write CSR:", err);
     return res.status(500).json({ error: "Failed to save CSR" });
   }
-  console.log("role ", role);
+  console.log("Requested role:", role);
 
   let ext = "role_viewer";
   if (role === "admin") ext = "role_admin";
   if (role === "editor") ext = "role_editor";
 
+  // Ensure you have "openssl.cnf" and "demoCA" folders in the same directory as app.js
   const cmd = `openssl x509 -req -in "${csrPath}" -CA demoCA/intermediate/int.cert.pem -CAkey demoCA/intermediate/private/int.key.pem -CAcreateserial -out "${certPath}" -days 365 -extfile openssl.cnf -extensions ${ext}`;
 
   exec(cmd, (error, stdout, stderr) => {
     if (error) {
-      console.error("[OpenSSL] ", stderr || error.message);
+      console.error("[OpenSSL Error]", stderr || error.message);
       try {
         if (fs.existsSync(csrPath)) fs.unlinkSync(csrPath);
       } catch (e) {}
-      return res.status(500).json({ error: "Signing failed" });
+      return res.status(500).json({ error: "Signing failed (Check OpenSSL logs)" });
     }
 
     try {
       const signedCert = fs.readFileSync(certPath, "utf8");
-      fs.unlinkSync(csrPath);
+      // Clean up CSR
+      if (fs.existsSync(csrPath)) fs.unlinkSync(csrPath);
+      
       return res.json({ success: true, certificate: signedCert });
     } catch (err) {
       console.error(err);
@@ -132,7 +142,7 @@ app.post("/auth/verify", (req, res) => {
     return res.status(400).json({ error: "No active challenge" });
 
   const challenge = challenges[username];
-  delete challenges[username];
+  delete challenges[username]; // One-time use
 
   const certPath = path.join(CERT_DIR, `${username}_cert.pem`);
   if (!fs.existsSync(certPath)) {
@@ -163,12 +173,18 @@ app.post("/auth/verify", (req, res) => {
 const requireRole = (allowedRoles = []) => (req, res, next) => {
   const { username } = req.body;
 
+  // In a real app, you would verify the signature AGAIN here 
+  // or use a JWT. For this demo, we trust the username if the 
+  // previous /verify step succeeded in the frontend flow.
+  // (Ideally, this middleware should check a token, not just read the cert from disk).
+  
   const role = getRoleFromCert(username);
-  console.log("got role", role);
-  if (!role) return res.status(404).json({ error: "role not found" });
+  console.log(`Checking Access: User=${username}, Role=${role}`);
+  
+  if (!role) return res.status(404).json({ error: "Role not found in certificate" });
 
   if (!allowedRoles.includes(role)) {
-    return res.status(403).json({ error: "Access Denied" });
+    return res.status(403).json({ error: "Access Denied: Insufficient Privileges" });
   }
 
   next();
@@ -178,15 +194,15 @@ const requireRole = (allowedRoles = []) => (req, res, next) => {
 // Protected routes
 // ==============================
 app.post("/api/admin-data", requireRole(["admin"]), (req, res) => {
-  res.json({ data: "SECRET ADMIN DATA" });
+  res.json({ data: "SECRET ADMIN DATA: System Logs, User Management, Keys" });
 });
 
-app.post("/api/editor-data", requireRole(["editor"]), (req, res) => {
-  res.json({ data: "EDITOR CONTENT" });
+app.post("/api/editor-data", requireRole(["editor", "admin"]), (req, res) => {
+  res.json({ data: "EDITOR CONTENT: Drafts, articles, media assets" });
 });
 
-app.post("/api/viewer-data", requireRole(["viewer"]), (req, res) => {
-  res.json({ data: "VIEWER DATA" });
+app.post("/api/viewer-data", requireRole(["viewer", "editor", "admin"]), (req, res) => {
+  res.json({ data: "VIEWER DATA: Public articles, read-only content" });
 });
 
 // ==============================
