@@ -172,6 +172,7 @@ app.post("/auth/verify", (req, res) => {
 // ==============================
 const requireRole = (allowedRoles = []) => (req, res, next) => {
   const { username } = req.body;
+  console.log('middleware executed')
 
   // In a real app, you would verify the signature AGAIN here 
   // or use a JWT. For this demo, we trust the username if the 
@@ -193,17 +194,27 @@ const requireRole = (allowedRoles = []) => (req, res, next) => {
 // ==============================
 // Protected routes
 // ==============================
-app.post("/api/admin-data", requireRole(["admin"]), (req, res) => {
+app.post("/api/pki", requireRole(["admin"]), (req, res) => {
   res.json({ data: "SECRET ADMIN DATA" });
 });
 
-app.post("/api/editor-data", requireRole(["editor", "admin"]), (req, res) => {
+app.post("/api/hsm", requireRole(["editor", "admin"]), (req, res) => {
   res.json({ data: "EDITOR CONTENT" });
 });
 
-app.post("/api/viewer-data", requireRole(["viewer", "editor", "admin"]), (req, res) => {
+app.post("/api/identity", requireRole(["viewer", "editor", "admin"]), (req, res) => {
   res.json({ data: "VIEWER DATA" });
 });
+app.post("/api/security", requireRole(["admin"]),(req,res) =>{
+  res.json({data:"security data"});
+})
+app.post("/api/zero-trust",requireRole (["admin", "editor"]),(req,res) =>{
+  res.json({data:"zero trust data"});
+})
+app.post("/api/crypto", requireRole (["viewer","editor"]),(req,res) =>{
+  console.log(req.body);
+  res.json({data:"cryptograhic data"});
+})
 
 // ==============================
 app.listen(PORT, () => {
