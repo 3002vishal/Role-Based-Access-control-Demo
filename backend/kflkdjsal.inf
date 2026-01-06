@@ -1,0 +1,14 @@
+[NewRequest]
+Subject = "CN=kflkdjsal, E=fadsjlkf@gmail.com, OU=dsalkfj, O=fdlskajf, S=fdsakfj, C=IN"
+KeyLength = 2048
+KeySpec = 2 
+KeyUsage = 0xA0 
+MachineKeySet = FALSE
+Exportable = FALSE 
+RequestType = PKCS10
+SMIME = FALSE
+ProviderName = "SafeSign Standard Cryptographic Service Provider"
+ProviderType = 1
+KeyContainer = "kflkdjsal"
+[EnhancedKeyUsageExtension]
+OID=1.3.6.1.5.5.7.3.2 

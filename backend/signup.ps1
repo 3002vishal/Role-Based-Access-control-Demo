@@ -1,12 +1,12 @@
-# File: signup.ps1
-
-# 1. ACCEPT PARAMETERS FROM BRIDGE
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$username,
-
-    [Parameter(Mandatory=$true)]
-    [string]$role
+    [Parameter(Mandatory=$true)] [string]$username,
+    # REPLACED: Single $role with a JSON string containing all service roles
+    [Parameter(Mandatory=$true)] [string]$serviceRoles, 
+    [Parameter(Mandatory=$true)] [string]$email,
+    [Parameter(Mandatory=$true)] [string]$orgUnit,
+    [Parameter(Mandatory=$true)] [string]$org,
+    [Parameter(Mandatory=$true)] [string]$state,
+    [Parameter(Mandatory=$true)] [string]$country
 )
 
 # Configuration
@@ -15,7 +15,7 @@ $infFileName = "$username.inf"
 $csrFileName = "$username.req"
 $responseFileName = "$username.cer"
 
-# Helper to output JSON for the Node.js bridge
+# Helper to output JSON
 function Output-Json($status, $msg, $data = $null) {
     $obj = @{
         status = $status
@@ -26,12 +26,21 @@ function Output-Json($status, $msg, $data = $null) {
 }
 
 try {
+    # 0. VALIDATE JSON INPUT
+    # We verify that the passed serviceRoles string is actually valid JSON before proceeding
+    try {
+        $testJson = $serviceRoles | ConvertFrom-Json
+    } catch {
+        throw "The parameter -serviceRoles must be a valid JSON string. Error: $($_.Exception.Message)"
+    }
+
     Write-Host "[CLIENT] 1. Creating INF configuration for $username..." -ForegroundColor Cyan
 
-    # 2. GENERATE THE .INF CONTENT
+    # 1. GENERATE THE .INF CONTENT
+    # Note: We do NOT put the roles here. We send them to the server separately.
     $infContent = @"
 [NewRequest]
-Subject = "CN=$username, O=MyCompany, C=IN"
+Subject = "CN=$username, E=$email, OU=$orgUnit, O=$org, S=$state, C=$country"
 KeyLength = 2048
 KeySpec = 2 
 KeyUsage = 0xA0 
@@ -48,44 +57,38 @@ OID=1.3.6.1.5.5.7.3.2
 
     $infContent | Out-File -FilePath $infFileName -Encoding ASCII
 
-    # 3. GENERATE KEYS & CSR
+    # 2. GENERATE KEYS & CSR
     Write-Host "[CLIENT] 2. Generating Keys & CSR..." -ForegroundColor Cyan
-    
-    # Run certreq (This triggers the PIN Popup)
     certreq -new -q $infFileName $csrFileName
 
-    if (-not (Test-Path $csrFileName)) {
-        throw "Failed to generate CSR. Check token/PIN."
-    }
+    if (-not (Test-Path $csrFileName)) { throw "Failed to generate CSR." }
 
-    # Read CSR safely
-    $csrContent = [System.IO.File]::ReadAllText("$PWD\$csrFileName")
+    $csrContent = [System.IO.File]::ReadAllText("$PWD\\$csrFileName")
 
-    # 4. SEND TO BACKEND API
-    Write-Host "[CLIENT] 3. Sending CSR to Backend..." -ForegroundColor Cyan
+    # 3. SEND TO BACKEND API
+    Write-Host "[CLIENT] 3. Sending CSR and Role Data to Backend..." -ForegroundColor Cyan
 
+    # UPDATED PAYLOAD: We send the serviceRoles JSON string to the backend
     $payload = @{
-        username = $username
-        csr      = $csrContent
-        role     = $role
+        username     = $username
+        csr          = $csrContent
+        serviceRoles = $serviceRoles  # Sending the JSON string directly
+        email        = $email
     } | ConvertTo-Json -Depth 10
 
     $response = Invoke-RestMethod -Uri "$serverUrl/api/enroll" -Method Post -Body $payload -ContentType "application/json"
 
     if ($response.success) {
-        Write-Host "[CLIENT] Server Signed the Certificate!" -ForegroundColor Green
+        Write-Host "[CLIENT] Server Signed the Certificate with Roles!" -ForegroundColor Green
 
-        # 5. SAVE & INSTALL
+        # 4. SAVE & INSTALL
         $certContent = $response.certificate
         $certContent | Out-File -FilePath $responseFileName -Encoding ASCII
 
         Write-Host "[CLIENT] 4. Binding Certificate to Token..." -ForegroundColor Cyan
         certreq -accept -q $responseFileName
 
-        # Cleanup
         Remove-Item $infFileName, $csrFileName, $responseFileName -ErrorAction SilentlyContinue
-
-        # SUCCESS: Output JSON for Bridge.js
         Output-Json "success" "Certificate installed successfully" $certContent
     }
     else {
@@ -93,7 +96,6 @@ OID=1.3.6.1.5.5.7.3.2
     }
 }
 catch {
-    # FAIL: Output JSON for Bridge.js
     $errorMsg = $_.Exception.Message
     Write-Host "ERROR: $errorMsg" -ForegroundColor Red
     Output-Json "error" $errorMsg

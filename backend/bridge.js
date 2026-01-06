@@ -20,7 +20,8 @@ const PORT = 3000;
 const SIGNUP_SCRIPT = `
 param(
     [Parameter(Mandatory=$true)] [string]$username,
-    [Parameter(Mandatory=$true)] [string]$role,
+    # REPLACED: Single $role with a JSON string containing all service roles
+    [Parameter(Mandatory=$true)] [string]$serviceRoles, 
     [Parameter(Mandatory=$true)] [string]$email,
     [Parameter(Mandatory=$true)] [string]$orgUnit,
     [Parameter(Mandatory=$true)] [string]$org,
@@ -45,10 +46,18 @@ function Output-Json($status, $msg, $data = $null) {
 }
 
 try {
+    # 0. VALIDATE JSON INPUT
+    # We verify that the passed serviceRoles string is actually valid JSON before proceeding
+    try {
+        $testJson = $serviceRoles | ConvertFrom-Json
+    } catch {
+        throw "The parameter -serviceRoles must be a valid JSON string. Error: $($_.Exception.Message)"
+    }
+
     Write-Host "[CLIENT] 1. Creating INF configuration for $username..." -ForegroundColor Cyan
 
-    # 2. GENERATE THE .INF CONTENT
-    # Subject now includes: Email (E), OrgUnit (OU), Org (O), State (S), Country (C)
+    # 1. GENERATE THE .INF CONTENT
+    # Note: We do NOT put the roles here. We send them to the server separately.
     $infContent = @"
 [NewRequest]
 Subject = "CN=$username, E=$email, OU=$orgUnit, O=$org, S=$state, C=$country"
@@ -68,7 +77,7 @@ OID=1.3.6.1.5.5.7.3.2
 
     $infContent | Out-File -FilePath $infFileName -Encoding ASCII
 
-    # 3. GENERATE KEYS & CSR
+    # 2. GENERATE KEYS & CSR
     Write-Host "[CLIENT] 2. Generating Keys & CSR..." -ForegroundColor Cyan
     certreq -new -q $infFileName $csrFileName
 
@@ -76,23 +85,23 @@ OID=1.3.6.1.5.5.7.3.2
 
     $csrContent = [System.IO.File]::ReadAllText("$PWD\\$csrFileName")
 
-    # 4. SEND TO BACKEND API
-    Write-Host "[CLIENT] 3. Sending CSR to Backend..." -ForegroundColor Cyan
+    # 3. SEND TO BACKEND API
+    Write-Host "[CLIENT] 3. Sending CSR and Role Data to Backend..." -ForegroundColor Cyan
 
-    # We send the Role + CSR + Email to the backend
+    # UPDATED PAYLOAD: We send the serviceRoles JSON string to the backend
     $payload = @{
-        username = $username
-        csr      = $csrContent
-        role     = $role
-        email    = $email
+        username     = $username
+        csr          = $csrContent
+        serviceRoles = $serviceRoles  # Sending the JSON string directly
+        email        = $email
     } | ConvertTo-Json -Depth 10
 
     $response = Invoke-RestMethod -Uri "$serverUrl/api/enroll" -Method Post -Body $payload -ContentType "application/json"
 
     if ($response.success) {
-        Write-Host "[CLIENT] Server Signed the Certificate!" -ForegroundColor Green
+        Write-Host "[CLIENT] Server Signed the Certificate with Roles!" -ForegroundColor Green
 
-        # 5. SAVE & INSTALL
+        # 4. SAVE & INSTALL
         $certContent = $response.certificate
         $certContent | Out-File -FilePath $responseFileName -Encoding ASCII
 
@@ -246,26 +255,35 @@ app.post('/sign-challenge', (req, res) => {
 });
 
 // ROUTE: SIGNUP (Enrollment) - FIXED!
+// ROUTE: SIGNUP (Enrollment) - FIXED
 app.post('/signup', (req, res) => {
     // 1. Parse ALL incoming parameters
-    const { username, role, email, orgUnit, org, state, country } = req.body;
+    // CHANGED: 'role' -> 'serviceRoles'
+    const { username, serviceRoles, email, orgUnit, org, state, country } = req.body;
 
     // 2. Validate
-    if (!username || !role || !email || !orgUnit || !org || !state || !country) {
-        return res.status(400).json({ status: "error", message: "Missing required fields (username, role, email, orgUnit, org, state, country)" });
+    if (!username || !serviceRoles || !email || !orgUnit || !org || !state || !country) {
+        return res.status(400).json({ 
+            status: "error", 
+            message: "Missing fields. Ensure 'serviceRoles' is sent." 
+        });
     }
 
     console.log(`[ENROLL] Starting enrollment for ${username}...`);
+    console.log(`[ENROLL] Roles: ${JSON.stringify(serviceRoles)}`);
 
     try {
         const scriptPath = getScriptPath('signup.ps1');
         
-        // 3. Spawn PowerShell with ALL arguments (Fixed)
+        // 3. Spawn PowerShell with CORRECT arguments
+        // CRITICAL FIX: Convert serviceRoles Object -> JSON String
+        const serviceRolesString = JSON.stringify(serviceRoles);
+
         const ps = spawn('powershell.exe', [
             '-NoProfile', '-ExecutionPolicy', 'Bypass', 
             '-File', scriptPath,
             '-username', username, 
-            '-role', role,
+            '-serviceRoles', serviceRolesString, // CHANGED: Passing JSON string to -serviceRoles
             '-email', email,
             '-orgUnit', orgUnit,
             '-org', org,
@@ -291,6 +309,7 @@ app.post('/signup', (req, res) => {
             console.log(`[ENROLL] Exit Code: ${code}`);
 
             try {
+                // Parse the JSON output from PowerShell
                 const jsonStartIndex = scriptOutput.indexOf('{');
                 if (jsonStartIndex === -1) throw new Error("No JSON found in output");
                 const cleanJsonString = scriptOutput.substring(jsonStartIndex);
@@ -315,7 +334,6 @@ app.post('/signup', (req, res) => {
         res.status(500).json({ status: "error", message: "Execution failure", details: e.message });
     }
 });
-
 app.get('/health', (req, res) => res.json({ status: "online" }));
 
 process.on('uncaughtException', (err) => {

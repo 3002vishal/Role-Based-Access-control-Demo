@@ -13,7 +13,7 @@ default_md        = sha256
 policy            = policy_strict
 default_days      = 365
 
-# DO NOT copy CSR extensions (we want CA logic only)
+# Security: Do NOT copy extensions from the CSR. We want the CA to add them.
 copy_extensions   = none
 
 [ policy_strict ]
@@ -27,7 +27,6 @@ emailAddress            = optional
 # ===========================================================
 # ROOT CA EXTENSIONS
 # ===========================================================
-
 [ v3_ca ]
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
@@ -37,7 +36,6 @@ keyUsage = critical, cRLSign, keyCertSign
 # ===========================================================
 # INTERMEDIATE CA EXTENSIONS
 # ===========================================================
-
 [ v3_intermediate_ca ]
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
@@ -45,9 +43,8 @@ basicConstraints = critical, CA:true, pathlen:0
 keyUsage = critical, cRLSign, keyCertSign
 
 # ===========================================================
-# SERVER CERTIFICATE
+# SERVER CERTIFICATE EXTENSIONS
 # ===========================================================
-
 [ server_cert ]
 basicConstraints = CA:FALSE
 subjectKeyIdentifier = hash
@@ -56,9 +53,8 @@ keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
 
 # ===========================================================
-# BASIC CLIENT CERTIFICATE (NO ROLES)
+# STANDARD CLIENT CERTIFICATE (NO ROLES)
 # ===========================================================
-
 [ usr_cert ]
 basicConstraints = CA:FALSE
 subjectKeyIdentifier = hash
@@ -67,37 +63,22 @@ keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
 
 # ===========================================================
-# CLIENT CERT WITH ROLE = VIEWER  (ADDED BY CA)
+# DYNAMIC CLIENT CERTIFICATE (INJECTS ROLES FROM ENV VAR)
 # ===========================================================
-
-[ role_viewer ]
+# Use this extension when signing via Node.js:
+# openssl ca ... -extensions usr_cert_dynamic
+#
+# IMPORTANT: You must set the SERVICE_ROLES environment variable 
+# in your Node.js code before spawning the openssl process.
+# ===========================================================
+[ usr_cert_dynamic ]
 basicConstraints = CA:FALSE
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
-keyUsage = digitalSignature
+keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
-1.2.3.4.5.6.7.8.1 = ASN1:UTF8String:Role=viewer
 
-# ===========================================================
-# CLIENT CERT WITH ROLE = ADMIN  (ADDED BY CA)
-# ===========================================================
-
-[ role_admin ]
-basicConstraints = CA:FALSE
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer
-keyUsage = digitalSignature
-extendedKeyUsage = clientAuth
-1.2.3.4.5.6.7.8.1 = ASN1:UTF8String:Role=admin
-
-# ===========================================================
-# CLIENT CERT WITH ROLE = SUPERUSER  (EXAMPLE)
-# ===========================================================
-
-[ role_editor ]
-basicConstraints = CA:FALSE
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer
-keyUsage = digitalSignature
-extendedKeyUsage = clientAuth
-1.2.3.4.5.6.7.8.1 = ASN1:UTF8String:Role=editor
+# YOUR CUSTOM OID FOR ROLES
+# The value is pulled from the environment variable 'SERVICE_ROLES'
+# Example value: '{"ZTA":"Admin", "PKI":"Viewer"}'
+1.2.3.4.5.6.7.8.1 = ASN1:UTF8String:$ENV::SERVICE_ROLES
