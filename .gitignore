@@ -1,0 +1,21 @@
+# Local configuration
+.env
+.env.*
+!*.env.example
+
+# Dependencies / build output
+node_modules/
+target/
+build/
+dist/
+.idea/
+.vscode/
+
+# Never commit private keys or keystores
+*.key
+*.key.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/private/*
